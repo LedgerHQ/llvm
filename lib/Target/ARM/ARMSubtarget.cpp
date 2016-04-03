@@ -257,6 +257,10 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
   if ((Bits[ARM::ProcA5] || Bits[ARM::ProcA8]) && // Where this matters
       (Options.UnsafeFPMath || isTargetDarwin()))
     UseNEONForSinglePrecisionFP = true;
+
+  if (TM.getRelocationModel() == Reloc::RWPI ||
+      TM.getRelocationModel() == Reloc::ROPI_RWPI)
+    ReserveR9 = true;
 }
 
 bool ARMSubtarget::isAPCS_ABI() const {
@@ -278,7 +282,8 @@ bool ARMSubtarget::isAAPCS16_ABI() const {
 bool
 ARMSubtarget::GVIsIndirectSymbol(const GlobalValue *GV,
                                  Reloc::Model RelocM) const {
-  if (RelocM == Reloc::Static)
+  if (RelocM == Reloc::Static || RelocM == Reloc::ROPI ||
+      RelocM == Reloc::RWPI || RelocM == Reloc::ROPI_RWPI)
     return false;
 
   bool isDef = GV->isStrongDefinitionForLinker();

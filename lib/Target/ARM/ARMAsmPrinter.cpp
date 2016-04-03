@@ -711,6 +711,26 @@ void ARMAsmPrinter::emitAttributes() {
                       ARMBuildAttrs::AddressROPCRel);
     ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_GOT_use,
                       ARMBuildAttrs::AddressGOT);
+  } else if (TM.getRelocationModel() == Reloc::ROPI) {
+    // ROPI specific attributes.
+    ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_RO_data,
+                      ARMBuildAttrs::AddressROPCRel);
+    ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_GOT_use,
+                      ARMBuildAttrs::AddressDirect);
+  } else if (TM.getRelocationModel() == Reloc::RWPI) {
+    // RWPI specific attributes.
+    ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_RW_data,
+                      ARMBuildAttrs::AddressRWSBRel);
+    ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_GOT_use,
+                      ARMBuildAttrs::AddressDirect);
+  } else if (TM.getRelocationModel() == Reloc::ROPI_RWPI) {
+    // ROPI+RWPI specific attributes.
+    ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_RO_data,
+                      ARMBuildAttrs::AddressROPCRel);
+    ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_RW_data,
+                      ARMBuildAttrs::AddressRWSBRel);
+    ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_GOT_use,
+                      ARMBuildAttrs::AddressDirect);
   } else {
     // Allow direct addressing of imported data for all other relocation models.
     ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_GOT_use,
@@ -836,12 +856,14 @@ void ARMAsmPrinter::emitAttributes() {
     }
   }
 
-  // TODO: We currently only support either reserving the register, or treating
-  // it as another callee-saved register, but not as SB or a TLS pointer; It
-  // would instead be nicer to push this from the frontend as metadata, as we do
-  // for the wchar and enum size tags
-  if (STI.isR9Reserved())
-    ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_R9_use, ARMBuildAttrs::R9Reserved);
+  // We currently do not support using R9 as the TLS pointer.
+  if (STI.isR9Reserved()) {
+    if (TM.getRelocationModel() == Reloc::RWPI ||
+        TM.getRelocationModel() == Reloc::ROPI_RWPI)
+      ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_R9_use, ARMBuildAttrs::R9IsSB);
+    else
+      ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_R9_use, ARMBuildAttrs::R9Reserved);
+    }
   else
     ATS.emitAttribute(ARMBuildAttrs::ABI_PCS_R9_use, ARMBuildAttrs::R9IsGPR);
 
@@ -874,6 +896,7 @@ getModifierVariantKind(ARMCP::ARMCPModifier Modifier) {
   case ARMCP::TPOFF:       return MCSymbolRefExpr::VK_TPOFF;
   case ARMCP::GOTTPOFF:    return MCSymbolRefExpr::VK_GOTTPOFF;
   case ARMCP::GOT_PREL:    return MCSymbolRefExpr::VK_ARM_GOT_PREL;
+  case ARMCP::SBREL:       return MCSymbolRefExpr::VK_ARM_SBREL;
   }
   llvm_unreachable("Invalid ARMCPModifier!");
 }
@@ -1007,7 +1030,9 @@ void ARMAsmPrinter::EmitJumpTableAddrs(const MachineInstr *MI) {
     //    .word (LBB1 - LJTI_0_0)
     const MCExpr *Expr = MCSymbolRefExpr::create(MBB->getSymbol(), OutContext);
 
-    if (TM.getRelocationModel() == Reloc::PIC_)
+    if (TM.getRelocationModel() == Reloc::PIC_ ||
+        TM.getRelocationModel() == Reloc::ROPI ||
+        TM.getRelocationModel() == Reloc::ROPI_RWPI)
       Expr = MCBinaryExpr::createSub(Expr, MCSymbolRefExpr::create(JTISymbol,
                                                                    OutContext),
                                      OutContext);

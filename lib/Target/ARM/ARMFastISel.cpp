@@ -581,6 +581,11 @@ unsigned ARMFastISel::ARMMaterializeGV(const GlobalValue *GV, MVT VT) {
   if (VT != MVT::i32 || GV->isThreadLocal()) return 0;
 
   Reloc::Model RelocM = TM.getRelocationModel();
+
+  if (RelocM == Reloc::ROPI || RelocM == Reloc::RWPI ||
+      RelocM == Reloc::ROPI_RWPI)
+    return 0;
+
   bool IsIndirect = Subtarget->GVIsIndirectSymbol(GV, RelocM);
   const TargetRegisterClass *RC = isThumb2 ? &ARM::rGPRRegClass
                                            : &ARM::GPRRegClass;

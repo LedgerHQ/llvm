@@ -2525,8 +2525,9 @@ SDValue ARMTargetLowering::LowerBlockAddress(SDValue Op,
   EVT PtrVT = getPointerTy(DAG.getDataLayout());
   const BlockAddress *BA = cast<BlockAddressSDNode>(Op)->getBlockAddress();
   Reloc::Model RelocM = getTargetMachine().getRelocationModel();
+  bool isPCRelative = RelocM != Reloc::Static && RelocM != Reloc::RWPI;
   SDValue CPAddr;
-  if (RelocM == Reloc::Static) {
+  if (!isPCRelative) {
     CPAddr = DAG.getTargetConstantPool(BA, PtrVT, 4);
   } else {
     unsigned PCAdj = Subtarget->isThumb() ? 4 : 8;
@@ -2541,7 +2542,7 @@ SDValue ARMTargetLowering::LowerBlockAddress(SDValue Op,
       DAG.getLoad(PtrVT, DL, DAG.getEntryNode(), CPAddr,
                   MachinePointerInfo::getConstantPool(DAG.getMachineFunction()),
                   false, false, false, 0);
-  if (RelocM == Reloc::Static)
+  if (!isPCRelative)
     return Result;
   SDValue PICLabel = DAG.getConstant(ARMPCLabelIndex, DL, MVT::i32);
   return DAG.getNode(ARMISD::PIC_ADD, DL, PtrVT, Result, PICLabel);
@@ -2792,7 +2793,13 @@ SDValue ARMTargetLowering::LowerGlobalAddressELF(SDValue Op,
                                                  SelectionDAG &DAG) const {
   EVT PtrVT = getPointerTy(DAG.getDataLayout());
   SDLoc dl(Op);
+  Reloc::Model RelocM = getTargetMachine().getRelocationModel();
   const GlobalValue *GV = cast<GlobalAddressSDNode>(Op)->getGlobal();
+  if (const GlobalAlias *GA = dyn_cast<GlobalAlias>(GV))
+    GV = GA->getBaseObject();
+  const bool IsRO =
+      (isa<GlobalVariable>(GV) && cast<GlobalVariable>(GV)->isConstant()) ||
+      isa<Function>(GV);
   if (getTargetMachine().getRelocationModel() == Reloc::PIC_) {
     bool UseGOT_PREL =
         !(GV->hasHiddenVisibility() || GV->hasLocalLinkage());
@@ -2820,6 +2827,24 @@ SDValue ARMTargetLowering::LowerGlobalAddressELF(SDValue Op,
       Result = DAG.getLoad(PtrVT, dl, Chain, Result,
                            MachinePointerInfo::getGOT(DAG.getMachineFunction()),
                            false, false, false, 0);
+    return Result;
+  } else if (((RelocM == Reloc::ROPI || RelocM == Reloc::ROPI_RWPI) && IsRO)) {
+    // PC-relative
+    SDValue G = DAG.getTargetGlobalAddress(GV, dl, PtrVT);
+    SDValue Result = DAG.getNode(ARMISD::WrapperPIC, dl, PtrVT, G);
+    return Result;
+  } else if ((RelocM == Reloc::RWPI || RelocM == Reloc::ROPI_RWPI) && !IsRO) {
+    // SB-relative
+    ARMConstantPoolValue *CPV =
+      ARMConstantPoolConstant::Create(GV, ARMCP::SBREL);
+    SDValue CPAddr = DAG.getTargetConstantPool(CPV, PtrVT, 4);
+    CPAddr = DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, CPAddr);
+    SDValue G = DAG.getLoad(
+        PtrVT, dl, DAG.getEntryNode(), CPAddr,
+        MachinePointerInfo::getConstantPool(DAG.getMachineFunction()), false,
+        false, false, 0);
+    SDValue SB = DAG.getCopyFromReg(DAG.getEntryNode(), dl, ARM::R9, PtrVT);
+    SDValue Result = DAG.getNode(ISD::ADD, dl, PtrVT, SB, G);
     return Result;
   }
 
@@ -4004,7 +4029,9 @@ SDValue ARMTargetLowering::LowerBR_JT(SDValue Op, SelectionDAG &DAG) const {
     return DAG.getNode(ARMISD::BR2_JT, dl, MVT::Other, Chain,
                        Addr, Op.getOperand(2), JTI);
   }
-  if (getTargetMachine().getRelocationModel() == Reloc::PIC_) {
+  if (getTargetMachine().getRelocationModel() == Reloc::PIC_ ||
+      getTargetMachine().getRelocationModel() == Reloc::ROPI ||
+      getTargetMachine().getRelocationModel() == Reloc::ROPI_RWPI) {
     Addr =
         DAG.getLoad((EVT)MVT::i32, dl, Chain, Addr,
                     MachinePointerInfo::getJumpTable(DAG.getMachineFunction()),
